@@ -1,0 +1,573 @@
+classdef TemperatureControlDashboard < matlab.apps.AppBase
+
+    % Properties that correspond to app components
+    properties (Access = public)
+        UIFigure                matlab.ui.Figure
+        
+        % Main layout
+        MainGridLayout          matlab.ui.container.GridLayout
+        LeftPanel               matlab.ui.container.Panel
+        RightPanel              matlab.ui.container.Panel
+        
+        % Title
+        TitleLabel              matlab.ui.control.Label
+        
+        % PID Sliders (Left Panel)
+        PIDParamsLabel          matlab.ui.control.Label
+        KpSlider                matlab.ui.control.Slider
+        KpLabel                 matlab.ui.control.Label
+        KpValueLabel            matlab.ui.control.Label
+        KiSlider                matlab.ui.control.Slider
+        KiLabel                 matlab.ui.control.Label
+        KiValueLabel            matlab.ui.control.Label
+        KdSlider                matlab.ui.control.Slider
+        KdLabel                 matlab.ui.control.Label
+        KdValueLabel            matlab.ui.control.Label
+        
+        % Setpoint & Disturbance controls
+        SetpointLabel           matlab.ui.control.Label
+        SetpointSpinner         matlab.ui.control.Spinner
+        DistLabel               matlab.ui.control.Label
+        DistSpinner             matlab.ui.control.Spinner
+        DistTimeLabel           matlab.ui.control.Label
+        DistTimeSpinner         matlab.ui.control.Spinner
+        
+        % Buttons
+        RunButton               matlab.ui.control.Button
+        ResetButton             matlab.ui.control.Button
+        
+        % Gauges
+        TempGauge               matlab.ui.control.Gauge
+        TempGaugeLabel          matlab.ui.control.Label
+        OvershootGauge          matlab.ui.control.NinetyDegreeGauge
+        OvershootGaugeLabel     matlab.ui.control.Label
+        
+        % Indicators / Lamps
+        StabilityLamp           matlab.ui.control.Lamp
+        StabilityLabel          matlab.ui.control.Label
+        OvershootLamp           matlab.ui.control.Lamp
+        OvershootLabel          matlab.ui.control.Label
+        SteadyStateLamp         matlab.ui.control.Lamp
+        SteadyStateLabel        matlab.ui.control.Label
+        
+        % Metrics display
+        MetricsPanel            matlab.ui.container.Panel
+        RiseTimeLabel           matlab.ui.control.Label
+        RiseTimeValue           matlab.ui.control.Label
+        SettlingTimeLabel       matlab.ui.control.Label
+        SettlingTimeValue       matlab.ui.control.Label
+        OvershootMetLabel       matlab.ui.control.Label
+        OvershootMetValue       matlab.ui.control.Label
+        SteadyStateErrLabel     matlab.ui.control.Label
+        SteadyStateErrValue     matlab.ui.control.Label
+        PeakTimeLabel           matlab.ui.control.Label
+        PeakTimeValue           matlab.ui.control.Label
+        
+        % Axes (Right Panel)
+        StepAxes                matlab.ui.control.UIAxes
+        DistAxes                matlab.ui.control.UIAxes
+        BodeAxes                matlab.ui.control.UIAxes
+        RootAxes                matlab.ui.control.UIAxes
+    end
+
+    properties (Access = private)
+        % Plant + system
+        G           % Plant TF
+        sys_PID     % Closed-loop TF
+        C           % PID controller
+    end
+
+    methods (Access = private)
+
+        function buildPlant(app)
+            app.G = tf(2, [10 1]);
+        end
+
+        function runSimulation(app)
+            Kp = app.KpSlider.Value;
+            Ki = app.KiSlider.Value;
+            Kd = app.KdSlider.Value;
+            
+            app.C      = pid(Kp, Ki, Kd);
+            app.sys_PID = feedback(app.C * app.G, 1);
+            
+            sp = app.SetpointSpinner.Value;
+            
+            % ---- Step Response ----
+            t_step = 0:0.1:60;
+            [y, t] = step(sp * app.sys_PID, t_step);
+            
+            cla(app.StepAxes);
+            plot(app.StepAxes, t, y, 'b-', 'LineWidth', 2);
+            hold(app.StepAxes, 'on');
+            yline(app.StepAxes, sp, 'r--', 'LineWidth', 1.5, 'Label', 'Setpoint');
+            hold(app.StepAxes, 'off');
+            title(app.StepAxes, 'Step Response');
+            xlabel(app.StepAxes, 'Time (s)');
+            ylabel(app.StepAxes, 'Temperature (°C)');
+            grid(app.StepAxes, 'on');
+            legend(app.StepAxes, 'Output', 'Setpoint', 'Location', 'best');
+            
+            % ---- Disturbance Response ----
+            t_dist = 0:0.1:80;
+            d = zeros(size(t_dist));
+            d_time = app.DistTimeSpinner.Value;
+            d_amp  = app.DistSpinner.Value;
+            d(t_dist >= d_time) = d_amp;
+            
+            y_dist = lsim(app.sys_PID, d, t_dist);
+            
+            cla(app.DistAxes);
+            yyaxis(app.DistAxes, 'left');
+            plot(app.DistAxes, t_dist, y_dist, 'b-', 'LineWidth', 2);
+            ylabel(app.DistAxes, 'Temperature Output');
+            yyaxis(app.DistAxes, 'right');
+            plot(app.DistAxes, t_dist, d, 'r--', 'LineWidth', 1.5);
+            ylabel(app.DistAxes, 'Disturbance');
+            title(app.DistAxes, 'Disturbance Rejection');
+            xlabel(app.DistAxes, 'Time (s)');
+            grid(app.DistAxes, 'on');
+            legend(app.DistAxes, 'Output', 'Disturbance', 'Location', 'best');
+            
+            % ---- Bode Plot ----
+            cla(app.BodeAxes);
+            OL = app.C * app.G;
+            bodeplot(app.BodeAxes, OL);
+            title(app.BodeAxes, 'Bode Plot (Open Loop)');
+            grid(app.BodeAxes, 'on');
+            
+            % ---- Root Locus ----
+            cla(app.RootAxes);
+            rlocus(app.RootAxes, app.G);
+            title(app.RootAxes, 'Root Locus');
+            grid(app.RootAxes, 'on');
+            
+            % ---- Performance Metrics ----
+            try
+                info = stepinfo(sp * app.sys_PID);
+                [y2, ~] = step(sp * app.sys_PID);
+                ess = abs(sp - y2(end));
+                
+                app.RiseTimeValue.Text     = sprintf('%.3f s', info.RiseTime);
+                app.SettlingTimeValue.Text = sprintf('%.3f s', info.SettlingTime);
+                app.OvershootMetValue.Text = sprintf('%.2f %%', info.Overshoot);
+                app.SteadyStateErrValue.Text = sprintf('%.4f', ess);
+                app.PeakTimeValue.Text     = sprintf('%.3f s', info.PeakTime);
+                
+                % Update gauges
+                final_temp = y2(end);
+                app.TempGauge.Value = min(max(final_temp, 0), 200);
+                app.OvershootGauge.Value = min(max(info.Overshoot, 0), 100);
+                
+                % Update lamps
+                % Stability lamp
+                p = pole(app.sys_PID);
+                if all(real(p) < 0)
+                    app.StabilityLamp.Color = 'green';
+                else
+                    app.StabilityLamp.Color = 'red';
+                end
+                
+                % Overshoot lamp
+                if info.Overshoot < 10
+                    app.OvershootLamp.Color = 'green';
+                elseif info.Overshoot < 25
+                    app.OvershootLamp.Color = [1 0.6 0]; % orange
+                else
+                    app.OvershootLamp.Color = 'red';
+                end
+                
+                % Steady state lamp
+                if ess < 0.05
+                    app.SteadyStateLamp.Color = 'green';
+                elseif ess < 0.1
+                    app.SteadyStateLamp.Color = [1 0.6 0];
+                else
+                    app.SteadyStateLamp.Color = 'red';
+                end
+                
+            catch ME
+                app.RiseTimeValue.Text     = 'N/A';
+                app.SettlingTimeValue.Text = 'N/A';
+                app.OvershootMetValue.Text = 'N/A';
+                app.SteadyStateErrValue.Text = 'N/A';
+                app.PeakTimeValue.Text     = 'N/A';
+            end
+        end
+    end
+
+    % Callbacks
+    methods (Access = private)
+
+        function KpSliderChanged(app, ~)
+            app.KpValueLabel.Text = sprintf('%.2f', app.KpSlider.Value);
+        end
+
+        function KiSliderChanged(app, ~)
+            app.KiValueLabel.Text = sprintf('%.3f', app.KiSlider.Value);
+        end
+
+        function KdSliderChanged(app, ~)
+            app.KdValueLabel.Text = sprintf('%.2f', app.KdSlider.Value);
+        end
+
+        function RunButtonPushed(app, ~)
+            app.RunButton.Enable = 'off';
+            app.RunButton.Text   = 'Running...';
+            drawnow;
+            runSimulation(app);
+            app.RunButton.Enable = 'on';
+            app.RunButton.Text   = '▶  Run Simulation';
+        end
+
+        function ResetButtonPushed(app, ~)
+            app.KpSlider.Value = 3;
+            app.KiSlider.Value = 0.5;
+            app.KdSlider.Value = 1;
+            app.KpValueLabel.Text = '3.00';
+            app.KiValueLabel.Text = '0.500';
+            app.KdValueLabel.Text = '1.00';
+            app.SetpointSpinner.Value  = 1;
+            app.DistSpinner.Value      = -0.3;
+            app.DistTimeSpinner.Value  = 15;
+            runSimulation(app);
+        end
+    end
+
+    % Component initialization
+    methods (Access = private)
+
+        function createComponents(app)
+            % Main Figure
+            app.UIFigure = uifigure('Visible', 'off');
+            app.UIFigure.Position = [50 50 1350 820];
+            app.UIFigure.Name     = 'Industrial Temperature PID Control Dashboard';
+            app.UIFigure.Color    = [0.12 0.12 0.16];
+
+            % Title
+            app.TitleLabel = uilabel(app.UIFigure);
+            app.TitleLabel.Text = '🌡  INDUSTRIAL TEMPERATURE CONTROL — PID DASHBOARD';
+            app.TitleLabel.FontSize  = 18;
+            app.TitleLabel.FontWeight = 'bold';
+            app.TitleLabel.FontColor = [0.2 0.8 1];
+            app.TitleLabel.BackgroundColor = [0.12 0.12 0.16];
+            app.TitleLabel.Position = [20 780 1300 30];
+            app.TitleLabel.HorizontalAlignment = 'center';
+
+            % ---- LEFT PANEL ----
+            app.LeftPanel = uipanel(app.UIFigure);
+            app.LeftPanel.Position       = [10 10 310 760];
+            app.LeftPanel.BackgroundColor = [0.16 0.16 0.22];
+            app.LeftPanel.ForegroundColor = [0.9 0.9 0.9];
+            app.LeftPanel.Title          = ' Control Parameters';
+            app.LeftPanel.FontSize       = 13;
+            app.LeftPanel.FontWeight     = 'bold';
+
+            yStart = 710;
+
+            % PID label
+            app.PIDParamsLabel = uilabel(app.LeftPanel);
+            app.PIDParamsLabel.Text = 'PID Gains';
+            app.PIDParamsLabel.FontSize = 12;
+            app.PIDParamsLabel.FontWeight = 'bold';
+            app.PIDParamsLabel.FontColor  = [0.2 0.8 1];
+            app.PIDParamsLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.PIDParamsLabel.Position = [10 yStart-20 280 22];
+
+            % Kp
+            app.KpLabel = uilabel(app.LeftPanel);
+            app.KpLabel.Text = 'Kp (Proportional)';
+            app.KpLabel.FontColor = [0.85 0.85 0.85];
+            app.KpLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.KpLabel.Position = [10 yStart-50 160 20];
+
+            app.KpValueLabel = uilabel(app.LeftPanel);
+            app.KpValueLabel.Text = '3.00';
+            app.KpValueLabel.FontColor = [0.2 1 0.5];
+            app.KpValueLabel.FontWeight = 'bold';
+            app.KpValueLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.KpValueLabel.Position = [240 yStart-50 60 20];
+            app.KpValueLabel.HorizontalAlignment = 'right';
+
+            app.KpSlider = uislider(app.LeftPanel);
+            app.KpSlider.Limits   = [0.1 20];
+            app.KpSlider.Value    = 3;
+            app.KpSlider.Position = [10 yStart-80 280 3];
+            app.KpSlider.FontColor = [0.85 0.85 0.85];
+            app.KpSlider.ValueChangedFcn = createCallbackFcn(app, @KpSliderChanged, true);
+
+            % Ki
+            app.KiLabel = uilabel(app.LeftPanel);
+            app.KiLabel.Text = 'Ki (Integral)';
+            app.KiLabel.FontColor = [0.85 0.85 0.85];
+            app.KiLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.KiLabel.Position = [10 yStart-130 160 20];
+
+            app.KiValueLabel = uilabel(app.LeftPanel);
+            app.KiValueLabel.Text = '0.500';
+            app.KiValueLabel.FontColor = [0.2 1 0.5];
+            app.KiValueLabel.FontWeight = 'bold';
+            app.KiValueLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.KiValueLabel.Position = [240 yStart-130 60 20];
+            app.KiValueLabel.HorizontalAlignment = 'right';
+
+            app.KiSlider = uislider(app.LeftPanel);
+            app.KiSlider.Limits   = [0 5];
+            app.KiSlider.Value    = 0.5;
+            app.KiSlider.Position = [10 yStart-160 280 3];
+            app.KiSlider.FontColor = [0.85 0.85 0.85];
+            app.KiSlider.ValueChangedFcn = createCallbackFcn(app, @KiSliderChanged, true);
+
+            % Kd
+            app.KdLabel = uilabel(app.LeftPanel);
+            app.KdLabel.Text = 'Kd (Derivative)';
+            app.KdLabel.FontColor = [0.85 0.85 0.85];
+            app.KdLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.KdLabel.Position = [10 yStart-210 160 20];
+
+            app.KdValueLabel = uilabel(app.LeftPanel);
+            app.KdValueLabel.Text = '1.00';
+            app.KdValueLabel.FontColor = [0.2 1 0.5];
+            app.KdValueLabel.FontWeight = 'bold';
+            app.KdValueLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.KdValueLabel.Position = [240 yStart-210 60 20];
+            app.KdValueLabel.HorizontalAlignment = 'right';
+
+            app.KdSlider = uislider(app.LeftPanel);
+            app.KdSlider.Limits   = [0 10];
+            app.KdSlider.Value    = 1;
+            app.KdSlider.Position = [10 yStart-240 280 3];
+            app.KdSlider.FontColor = [0.85 0.85 0.85];
+            app.KdSlider.ValueChangedFcn = createCallbackFcn(app, @KdSliderChanged, true);
+
+            % Setpoint + Disturbance
+            spY = yStart - 290;
+            lbl = uilabel(app.LeftPanel);
+            lbl.Text = 'Simulation Settings';
+            lbl.FontSize = 12; lbl.FontWeight = 'bold';
+            lbl.FontColor = [0.2 0.8 1];
+            lbl.BackgroundColor = [0.16 0.16 0.22];
+            lbl.Position = [10 spY 280 22];
+
+            app.SetpointLabel = uilabel(app.LeftPanel);
+            app.SetpointLabel.Text = 'Setpoint';
+            app.SetpointLabel.FontColor = [0.85 0.85 0.85];
+            app.SetpointLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.SetpointLabel.Position = [10 spY-35 130 20];
+
+            app.SetpointSpinner = uispinner(app.LeftPanel);
+            app.SetpointSpinner.Limits = [0 200];
+            app.SetpointSpinner.Value  = 1;
+            app.SetpointSpinner.Step   = 0.5;
+            app.SetpointSpinner.Position = [160 spY-35 120 28];
+
+            app.DistLabel = uilabel(app.LeftPanel);
+            app.DistLabel.Text = 'Disturbance Amplitude';
+            app.DistLabel.FontColor = [0.85 0.85 0.85];
+            app.DistLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.DistLabel.Position = [10 spY-75 170 20];
+
+            app.DistSpinner = uispinner(app.LeftPanel);
+            app.DistSpinner.Limits = [-5 5];
+            app.DistSpinner.Value  = -0.3;
+            app.DistSpinner.Step   = 0.1;
+            app.DistSpinner.Position = [200 spY-75 80 28];
+
+            app.DistTimeLabel = uilabel(app.LeftPanel);
+            app.DistTimeLabel.Text = 'Disturbance Time (s)';
+            app.DistTimeLabel.FontColor = [0.85 0.85 0.85];
+            app.DistTimeLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.DistTimeLabel.Position = [10 spY-110 170 20];
+
+            app.DistTimeSpinner = uispinner(app.LeftPanel);
+            app.DistTimeSpinner.Limits = [1 70];
+            app.DistTimeSpinner.Value  = 15;
+            app.DistTimeSpinner.Step   = 1;
+            app.DistTimeSpinner.Position = [200 spY-110 80 28];
+
+            % ---- Gauges ----
+            gaugeY = spY - 165;
+            app.TempGaugeLabel = uilabel(app.LeftPanel);
+            app.TempGaugeLabel.Text = 'Final Temp (°C)';
+            app.TempGaugeLabel.FontColor = [0.85 0.85 0.85];
+            app.TempGaugeLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.TempGaugeLabel.Position = [10 gaugeY 130 20];
+            app.TempGaugeLabel.HorizontalAlignment = 'center';
+
+            app.TempGauge = uigauge(app.LeftPanel, 'circular');
+            app.TempGauge.Limits = [0 200];
+            app.TempGauge.Value  = 0;
+            app.TempGauge.ScaleColors = {[0.2 0.8 0.2], [1 0.8 0], [0.9 0.2 0.2]};
+            app.TempGauge.ScaleColorLimits = [0 80; 80 150; 150 200];
+            app.TempGauge.Position = [10 gaugeY-105 130 110];
+
+            app.OvershootGaugeLabel = uilabel(app.LeftPanel);
+            app.OvershootGaugeLabel.Text = 'Overshoot (%)';
+            app.OvershootGaugeLabel.FontColor = [0.85 0.85 0.85];
+            app.OvershootGaugeLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.OvershootGaugeLabel.Position = [155 gaugeY 130 20];
+            app.OvershootGaugeLabel.HorizontalAlignment = 'center';
+
+            app.OvershootGauge = uigauge(app.LeftPanel, 'ninetydegree');
+            app.OvershootGauge.Limits = [0 100];
+            app.OvershootGauge.Value  = 0;
+            app.OvershootGauge.ScaleColors = {[0.2 0.8 0.2], [1 0.8 0], [0.9 0.2 0.2]};
+            app.OvershootGauge.ScaleColorLimits = [0 10; 10 25; 25 100];
+            app.OvershootGauge.Position = [155 gaugeY-105 130 110];
+
+            % ---- Status Indicators ----
+            indY = gaugeY - 125;
+            lbl2 = uilabel(app.LeftPanel);
+            lbl2.Text = 'System Status';
+            lbl2.FontSize = 12; lbl2.FontWeight = 'bold';
+            lbl2.FontColor = [0.2 0.8 1];
+            lbl2.BackgroundColor = [0.16 0.16 0.22];
+            lbl2.Position = [10 indY 280 22];
+
+            % Stability
+            app.StabilityLamp = uilamp(app.LeftPanel);
+            app.StabilityLamp.Position = [10 indY-35 20 20];
+            app.StabilityLamp.Color = 'gray';
+
+            app.StabilityLabel = uilabel(app.LeftPanel);
+            app.StabilityLabel.Text = 'System Stable';
+            app.StabilityLabel.FontColor = [0.85 0.85 0.85];
+            app.StabilityLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.StabilityLabel.Position = [40 indY-35 230 20];
+
+            % Overshoot
+            app.OvershootLamp = uilamp(app.LeftPanel);
+            app.OvershootLamp.Position = [10 indY-65 20 20];
+            app.OvershootLamp.Color = 'gray';
+
+            app.OvershootLabel = uilabel(app.LeftPanel);
+            app.OvershootLabel.Text = 'Overshoot < 10%';
+            app.OvershootLabel.FontColor = [0.85 0.85 0.85];
+            app.OvershootLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.OvershootLabel.Position = [40 indY-65 230 20];
+
+            % Steady state
+            app.SteadyStateLamp = uilamp(app.LeftPanel);
+            app.SteadyStateLamp.Position = [10 indY-95 20 20];
+            app.SteadyStateLamp.Color = 'gray';
+
+            app.SteadyStateLabel = uilabel(app.LeftPanel);
+            app.SteadyStateLabel.Text = 'Steady-State Error < 5%';
+            app.SteadyStateLabel.FontColor = [0.85 0.85 0.85];
+            app.SteadyStateLabel.BackgroundColor = [0.16 0.16 0.22];
+            app.SteadyStateLabel.Position = [40 indY-95 230 20];
+
+            % ---- Metrics Panel ----
+            app.MetricsPanel = uipanel(app.LeftPanel);
+            app.MetricsPanel.Position       = [5 5 298 (indY - 115)];
+            app.MetricsPanel.Title          = ' Performance Metrics';
+            app.MetricsPanel.FontSize       = 11;
+            app.MetricsPanel.FontWeight     = 'bold';
+            app.MetricsPanel.BackgroundColor = [0.18 0.18 0.26];
+            app.MetricsPanel.ForegroundColor = [0.2 0.8 1];
+
+            metrics = {'Rise Time', 'Settling Time', 'Overshoot', 'Steady-State Error', 'Peak Time'};
+            metricValueProps = {'RiseTimeValue','SettlingTimeValue','OvershootMetValue','SteadyStateErrValue','PeakTimeValue'};
+            metricLabelProps = {'RiseTimeLabel','SettlingTimeLabel','OvershootMetLabel','SteadyStateErrLabel','PeakTimeLabel'};
+            my = (indY-115) - 40;
+
+            for i = 1:5
+                app.(metricLabelProps{i}) = uilabel(app.MetricsPanel);
+                app.(metricLabelProps{i}).Text = metrics{i};
+                app.(metricLabelProps{i}).FontColor  = [0.75 0.75 0.75];
+                app.(metricLabelProps{i}).BackgroundColor = [0.18 0.18 0.26];
+                app.(metricLabelProps{i}).Position = [8 my 145 20];
+
+                app.(metricValueProps{i}) = uilabel(app.MetricsPanel);
+                app.(metricValueProps{i}).Text = '—';
+                app.(metricValueProps{i}).FontColor  = [0.2 1 0.5];
+                app.(metricValueProps{i}).FontWeight = 'bold';
+                app.(metricValueProps{i}).BackgroundColor = [0.18 0.18 0.26];
+                app.(metricValueProps{i}).Position = [155 my 130 20];
+                app.(metricValueProps{i}).HorizontalAlignment = 'right';
+                my = my - 28;
+            end
+
+            % ---- Buttons ----
+            app.RunButton = uibutton(app.LeftPanel, 'push');
+            app.RunButton.Text     = '▶  Run Simulation';
+            app.RunButton.Position = [10 5+size(app.MetricsPanel.Position,1)-10 140 32];
+            app.RunButton.BackgroundColor = [0.1 0.6 0.3];
+            app.RunButton.FontColor = 'white';
+            app.RunButton.FontWeight = 'bold';
+            app.RunButton.ButtonPushedFcn = createCallbackFcn(app, @RunButtonPushed, true);
+
+            app.ResetButton = uibutton(app.LeftPanel, 'push');
+            app.ResetButton.Text     = '↺  Reset Defaults';
+            app.ResetButton.Position = [160 5+size(app.MetricsPanel.Position,1)-10 138 32];
+            app.ResetButton.BackgroundColor = [0.5 0.15 0.15];
+            app.ResetButton.FontColor = 'white';
+            app.ResetButton.FontWeight = 'bold';
+            app.ResetButton.ButtonPushedFcn = createCallbackFcn(app, @ResetButtonPushed, true);
+
+            % ---- RIGHT PANEL (4 plots) ----
+            app.RightPanel = uipanel(app.UIFigure);
+            app.RightPanel.Position       = [328 10 1010 760];
+            app.RightPanel.BackgroundColor = [0.14 0.14 0.20];
+            app.RightPanel.ForegroundColor = [0.9 0.9 0.9];
+            app.RightPanel.Title          = ' Live Plots';
+            app.RightPanel.FontSize       = 13;
+            app.RightPanel.FontWeight     = 'bold';
+
+            % Step response axes (top-left)
+            app.StepAxes = uiaxes(app.RightPanel);
+            app.StepAxes.Position = [10 400 480 340];
+            app.StepAxes.Color           = [0.1 0.1 0.14];
+            app.StepAxes.XColor          = [0.7 0.7 0.7];
+            app.StepAxes.YColor          = [0.7 0.7 0.7];
+            app.StepAxes.GridColor       = [0.3 0.3 0.3];
+            app.StepAxes.GridAlpha       = 0.5;
+
+            % Disturbance axes (top-right)
+            app.DistAxes = uiaxes(app.RightPanel);
+            app.DistAxes.Position = [510 400 480 340];
+            app.DistAxes.Color           = [0.1 0.1 0.14];
+            app.DistAxes.XColor          = [0.7 0.7 0.7];
+            app.DistAxes.YColor          = [0.7 0.7 0.7];
+            app.DistAxes.GridColor       = [0.3 0.3 0.3];
+            app.DistAxes.GridAlpha       = 0.5;
+
+            % Bode axes (bottom-left)
+            app.BodeAxes = uiaxes(app.RightPanel);
+            app.BodeAxes.Position = [10 20 480 360];
+            app.BodeAxes.Color           = [0.1 0.1 0.14];
+            app.BodeAxes.XColor          = [0.7 0.7 0.7];
+            app.BodeAxes.YColor          = [0.7 0.7 0.7];
+            app.BodeAxes.GridColor       = [0.3 0.3 0.3];
+            app.BodeAxes.GridAlpha       = 0.5;
+
+            % Root Locus axes (bottom-right)
+            app.RootAxes = uiaxes(app.RightPanel);
+            app.RootAxes.Position = [510 20 480 360];
+            app.RootAxes.Color           = [0.1 0.1 0.14];
+            app.RootAxes.XColor          = [0.7 0.7 0.7];
+            app.RootAxes.YColor          = [0.7 0.7 0.7];
+            app.RootAxes.GridColor       = [0.3 0.3 0.3];
+            app.RootAxes.GridAlpha       = 0.5;
+        end
+    end
+
+    % App creation and deletion
+    methods (Access = public)
+
+        function app = TemperatureControlDashboard
+            createComponents(app)
+            registerApp(app, app.UIFigure)
+            buildPlant(app);
+            runSimulation(app);
+            if nargout == 0
+                clear app
+            end
+            app.UIFigure.Visible = 'on';
+        end
+
+        function delete(app)
+            delete(app.UIFigure)
+        end
+    end
+end
