@@ -142,6 +142,8 @@ sim('TempControl_PID')              % Run simulation
 
   
 CONTROL CRAFT Hackathon — Industrial Temperature Control Problem
+by-Manasvi H S
+Priyanka T N
 
 ---
 
